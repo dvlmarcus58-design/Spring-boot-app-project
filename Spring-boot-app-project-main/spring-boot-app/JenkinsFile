@@ -73,7 +73,7 @@ pipeline {
             steps {
                 withCredentials([string(credentialsId: 'github', variable: 'GITHUB_TOKEN')]) {
                     script {
-                        dir("${env.WORKSPACE}") {
+                        dir('Spring-boot-app-project-main') {
                             // Configure Git user for commits
                             sh "git config user.name '${GIT_USER_NAME}'"
                             sh "git config user.email '${GIT_USER_EMAIL}'"
