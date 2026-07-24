@@ -9,7 +9,7 @@ pipeline {
     }
 
     environment {
-        SONAR_URL = "http://13.206.102.21:9000"
+        SONAR_URL = "http://43.205.152.250:9000"
         GIT_REPO_NAME = "Spring-boot-app-project-main"
         GIT_USER_NAME = "dvlmarcus58-design"
         GIT_USER_EMAIL = "dvlmarcus58@gmail.com"
