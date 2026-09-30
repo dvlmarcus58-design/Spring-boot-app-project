@@ -1,6 +1,8 @@
+```groovy
 pipeline {
+
     agent {
-        java {
+        docker {
             image 'maven:3.9.4-eclipse-temurin-17'
             args '--user root -v /var/run/docker.sock:/var/run/docker.sock'
         }
@@ -35,7 +37,7 @@ pipeline {
                     ls -la
 
                     echo "===== GIT DIRECTORY ====="
-                    find . -name .git
+                    find . -name .git -type d
 
                     echo "===== GIT STATUS ====="
                     git status || true
@@ -43,25 +45,45 @@ pipeline {
             }
         }
 
-        stage('Build and Test') {
+        stage('Install Docker CLI') {
             steps {
                 sh '''
-                    cd Spring-boot-app-project-main/spring-boot-app
-                    mvn clean package
+                    echo "===== Installing Docker CLI ====="
+
+                    apt-get update
+                    apt-get install -y docker.io
+
+                    echo "===== Docker Version ====="
+                    docker --version
                 '''
+            }
+        }
+
+        stage('Build and Test') {
+            steps {
+                dir('Spring-boot-app-project-main/spring-boot-app') {
+                    sh '''
+                        mvn clean package
+                    '''
+                }
             }
         }
 
         stage('Static Code Analysis') {
             steps {
-                withCredentials([string(credentialsId: 'sonarqube', variable: 'SONAR_AUTH_TOKEN')]) {
-                    sh '''
-                        cd Spring-boot-app-project-main/spring-boot-app
-
-                        mvn org.sonarsource.scanner.maven:sonar-maven-plugin:4.0.0.4121:sonar \
-                            -Dsonar.login=$SONAR_AUTH_TOKEN \
-                            -Dsonar.host.url=${SONAR_URL}
-                    '''
+                dir('Spring-boot-app-project-main/spring-boot-app') {
+                    withCredentials([
+                        string(
+                            credentialsId: 'sonarqube',
+                            variable: 'SONAR_AUTH_TOKEN'
+                        )
+                    ]) {
+                        sh '''
+                            mvn org.sonarsource.scanner.maven:sonar-maven-plugin:4.0.0.4121:sonar \
+                                -Dsonar.login="$SONAR_AUTH_TOKEN" \
+                                -Dsonar.host.url="$SONAR_URL"
+                        '''
+                    }
                 }
             }
         }
@@ -72,17 +94,17 @@ pipeline {
             }
 
             steps {
-                sh '''
-                    apt-get update
-                    apt-get install -y docker.io
+                dir('Spring-boot-app-project-main/spring-boot-app') {
+                    sh '''
+                        echo "===== Building Docker Image ====="
 
-                    docker --version
-                '''
+                        docker build \
+                            -t "$DOCKER_IMAGE" .
 
-                sh """
-                    cd Spring-boot-app-project-main/spring-boot-app
-                    docker build -t ${DOCKER_IMAGE} .
-                """
+                        echo "===== Docker Images ====="
+                        docker images | head
+                    '''
+                }
             }
         }
 
@@ -92,10 +114,15 @@ pipeline {
             }
 
             steps {
-                withDockerRegistry([credentialsId: 'docker-cred',
-                                    url: "${DOCKER_REGISTRY_URL}"]) {
+                withDockerRegistry([
+                    credentialsId: 'docker-cred',
+                    url: "${DOCKER_REGISTRY_URL}"
+                ]) {
+                    sh '''
+                        echo "===== Pushing Docker Image ====="
 
-                    sh "docker push ${DOCKER_IMAGE}"
+                        docker push "$DOCKER_IMAGE"
+                    '''
                 }
             }
         }
@@ -103,31 +130,53 @@ pipeline {
         stage('Update Manifest and Push') {
             steps {
 
-                withCredentials([string(credentialsId: 'github', variable: 'GITHUB_TOKEN')]) {
+                withCredentials([
+                    string(
+                        credentialsId: 'github',
+                        variable: 'GITHUB_TOKEN'
+                    )
+                ]) {
 
-                    sh """
-                        git config --global user.name "${GIT_USER_NAME}"
-                        git config --global user.email "${GIT_USER_EMAIL}"
-                    """
+                    sh '''
+                        git config user.name "$GIT_USER_NAME"
+                        git config user.email "$GIT_USER_EMAIL"
+                    '''
 
-                    sh """
-                        sed -i 's/replaceImageTag/${BUILD_NUMBER}/g' \
+                    sh '''
+                        echo "===== Updating Kubernetes Manifest ====="
+
+                        sed -i "s/replaceImageTag/${BUILD_NUMBER}/g" \
                         Spring-boot-app-project-main/spring-boot-app-manifests/deployment.yml
-                    """
+                    '''
 
-                    sh """
-                        git add Spring-boot-app-project-main/spring-boot-app-manifests/deployment.yml
+                    sh '''
+                        echo "===== Git Status ====="
 
-                        git commit -m "Update deployment image to version ${BUILD_NUMBER}" || true
+                        git status
+                    '''
 
-                        git push https://${GITHUB_TOKEN}@github.com/${GIT_USER_NAME}/${GIT_REPO_NAME}.git HEAD:main
-                    """
+                    sh '''
+                        git add \
+                        Spring-boot-app-project-main/spring-boot-app-manifests/deployment.yml
+
+                        git commit \
+                        -m "Update deployment image to version ${BUILD_NUMBER}" || true
+                    '''
+
+                    sh '''
+                        echo "===== Pushing Manifest Changes ====="
+
+                        git push \
+                        https://${GITHUB_TOKEN}@github.com/${GIT_USER_NAME}/${GIT_REPO_NAME}.git \
+                        HEAD:main
+                    '''
                 }
             }
         }
     }
 
     post {
+
         always {
             echo 'Pipeline finished'
         }
@@ -141,3 +190,4 @@ pipeline {
         }
     }
 }
+```
