@@ -1,11 +1,6 @@
 pipeline {
 
-    agent {
-        docker {
-            image 'maven:3.9.4-eclipse-temurin-17'
-            args '--user root -v /var/run/docker.sock:/var/run/docker.sock'
-        }
-    }
+    agent any
 
     environment {
         SONAR_URL = "http://13.127.224.135:9000"
@@ -29,31 +24,51 @@ pipeline {
         stage('Debug Workspace') {
             steps {
                 sh '''
-                    echo "===== CURRENT DIRECTORY ====="
+                    echo "======================================"
+                    echo "         WORKSPACE INFORMATION"
+                    echo "======================================"
+
+                    echo "Current directory:"
                     pwd
 
-                    echo "===== FILES ====="
+                    echo ""
+                    echo "Java version:"
+                    java -version
+
+                    echo ""
+                    echo "Maven version:"
+                    mvn -version
+
+                    echo ""
+                    echo "Docker version:"
+                    docker --version
+
+                    echo ""
+                    echo "Workspace files:"
                     ls -la
 
-                    echo "===== GIT DIRECTORY ====="
-                    find . -name .git -type d
+                    echo ""
+                    echo "Directory structure:"
+                    find . -maxdepth 3 -type f | sort | head -100
 
-                    echo "===== GIT STATUS ====="
+                    echo ""
+                    echo "Git status:"
                     git status || true
                 '''
             }
         }
 
-        stage('Install Docker CLI') {
+        stage('Check Required Tools') {
             steps {
                 sh '''
-                    echo "===== Installing Docker CLI ====="
+                    echo "Checking required tools..."
 
-                    apt-get update
-                    apt-get install -y docker.io
+                    command -v java
+                    command -v mvn
+                    command -v docker
+                    command -v git
 
-                    echo "===== Docker Version ====="
-                    docker --version
+                    echo "All required tools are available."
                 '''
             }
         }
@@ -62,7 +77,14 @@ pipeline {
             steps {
                 dir('Spring-boot-app-project-main/spring-boot-app') {
                     sh '''
+                        echo "======================================"
+                        echo "       BUILDING JAVA APPLICATION"
+                        echo "======================================"
+
                         mvn clean package
+
+                        echo ""
+                        echo "Build completed successfully."
                     '''
                 }
             }
@@ -70,14 +92,21 @@ pipeline {
 
         stage('Static Code Analysis') {
             steps {
+
                 dir('Spring-boot-app-project-main/spring-boot-app') {
+
                     withCredentials([
                         string(
                             credentialsId: 'sonarqube',
                             variable: 'SONAR_AUTH_TOKEN'
                         )
                     ]) {
+
                         sh '''
+                            echo "======================================"
+                            echo "        SONARQUBE ANALYSIS"
+                            echo "======================================"
+
                             mvn org.sonarsource.scanner.maven:sonar-maven-plugin:4.0.0.4121:sonar \
                                 -Dsonar.login="$SONAR_AUTH_TOKEN" \
                                 -Dsonar.host.url="$SONAR_URL"
@@ -88,45 +117,89 @@ pipeline {
         }
 
         stage('Build Docker Image') {
+
             environment {
                 DOCKER_IMAGE = "${DOCKER_IMAGE_NAME}:${BUILD_NUMBER}"
             }
 
             steps {
+
                 dir('Spring-boot-app-project-main/spring-boot-app') {
+
                     sh '''
-                        echo "===== Building Docker Image ====="
+                        echo "======================================"
+                        echo "        BUILDING DOCKER IMAGE"
+                        echo "======================================"
+
+                        echo "Docker image:"
+                        echo "$DOCKER_IMAGE"
 
                         docker build \
                             -t "$DOCKER_IMAGE" .
 
-                        echo "===== Docker Images ====="
-                        docker images | head
+                        echo ""
+                        echo "Docker image created successfully."
+
+                        docker images | grep "ultimate-cicd-3" || true
                     '''
                 }
             }
         }
 
         stage('Push Docker Image') {
+
             environment {
                 DOCKER_IMAGE = "${DOCKER_IMAGE_NAME}:${BUILD_NUMBER}"
             }
 
             steps {
+
                 withDockerRegistry([
                     credentialsId: 'docker-cred',
                     url: "${DOCKER_REGISTRY_URL}"
                 ]) {
+
                     sh '''
-                        echo "===== Pushing Docker Image ====="
+                        echo "======================================"
+                        echo "        PUSHING DOCKER IMAGE"
+                        echo "======================================"
+
+                        echo "Pushing:"
+                        echo "$DOCKER_IMAGE"
 
                         docker push "$DOCKER_IMAGE"
+
+                        echo ""
+                        echo "Docker image pushed successfully."
                     '''
                 }
             }
         }
 
-        stage('Update Manifest and Push') {
+        stage('Update Kubernetes Manifest') {
+
+            steps {
+
+                sh '''
+                    echo "======================================"
+                    echo "      UPDATING KUBERNETES MANIFEST"
+                    echo "======================================"
+
+                    echo "Replacing image tag with:"
+                    echo "$BUILD_NUMBER"
+
+                    sed -i "s/replaceImageTag/${BUILD_NUMBER}/g" \
+                    Spring-boot-app-project-main/spring-boot-app-manifests/deployment.yml
+
+                    echo ""
+                    echo "Updated deployment.yml:"
+                    cat Spring-boot-app-project-main/spring-boot-app-manifests/deployment.yml
+                '''
+            }
+        }
+
+        stage('Commit and Push Manifest') {
+
             steps {
 
                 withCredentials([
@@ -137,37 +210,25 @@ pipeline {
                 ]) {
 
                     sh '''
+                        echo "======================================"
+                        echo "       PUSHING MANIFEST TO GITHUB"
+                        echo "======================================"
+
                         git config user.name "$GIT_USER_NAME"
                         git config user.email "$GIT_USER_EMAIL"
-                    '''
 
-                    sh '''
-                        echo "===== Updating Kubernetes Manifest ====="
-
-                        sed -i "s/replaceImageTag/${BUILD_NUMBER}/g" \
-                        Spring-boot-app-project-main/spring-boot-app-manifests/deployment.yml
-                    '''
-
-                    sh '''
-                        echo "===== Git Status ====="
-
-                        git status
-                    '''
-
-                    sh '''
                         git add \
                         Spring-boot-app-project-main/spring-boot-app-manifests/deployment.yml
 
                         git commit \
                         -m "Update deployment image to version ${BUILD_NUMBER}" || true
-                    '''
-
-                    sh '''
-                        echo "===== Pushing Manifest Changes ====="
 
                         git push \
                         https://${GITHUB_TOKEN}@github.com/${GIT_USER_NAME}/${GIT_REPO_NAME}.git \
                         HEAD:main
+
+                        echo ""
+                        echo "Manifest pushed successfully."
                     '''
                 }
             }
@@ -177,15 +238,21 @@ pipeline {
     post {
 
         always {
-            echo 'Pipeline finished'
+            echo '======================================'
+            echo '          PIPELINE FINISHED'
+            echo '======================================'
         }
 
         success {
-            echo 'Build succeeded!'
+            echo '======================================'
+            echo '          BUILD SUCCEEDED'
+            echo '======================================'
         }
 
         failure {
-            echo 'Build failed!'
+            echo '======================================'
+            echo '            BUILD FAILED'
+            echo '======================================'
         }
     }
 }
