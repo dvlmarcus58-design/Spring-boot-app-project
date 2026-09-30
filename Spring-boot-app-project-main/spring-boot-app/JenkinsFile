@@ -1,6 +1,6 @@
 pipeline {
     agent {
-        node {
+        java {
             image 'maven:3.9.4-eclipse-temurin-17'
             args '--user root -v /var/run/docker.sock:/var/run/docker.sock'
         }
